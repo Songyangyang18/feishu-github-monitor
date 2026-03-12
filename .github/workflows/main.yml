@@ -1,8 +1,8 @@
 name: 监控GitHub PR合并→飞书通知
 on:
   schedule:
-    - cron: '*/5 * * * *'
-  workflow_dispatch:
+    - cron: '*/5 * * * *'  # 每5分钟检查一次
+  workflow_dispatch:       # 支持手动触发
 
 jobs:
   check_pr:
@@ -11,26 +11,27 @@ jobs:
       - name: 检查原仓库已合并PR
         uses: actions/github-script@v7
         env:
+          # 关键：通过环境变量传递百度翻译密钥（稳定不报错）
           BAIDU_APP_ID: ${{ secrets.BAIDU_APP_ID }}
           BAIDU_SECRET_KEY: ${{ secrets.BAIDU_SECRET_KEY }}
-          FEISHU_WEBHOOK: "https://open.feishu.cn/open-apis/bot/v2/hook/167dcd0b-dab8-40c4-94d7-c43da40846a8"
-          TARGET_REPO: "ChaoWao/simpler"
+          FEISHU_WEBHOOK: ${{ 'https://open.feishu.cn/open-apis/bot/v2/hook/167dcd0b-dab8-40c4-94d7-c43da40846a8' }}
+          TARGET_REPO: ${{ 'ChaoWao/simpler' }}
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
+            // 从环境变量读取配置（核心修复）
             const TARGET_REPO = process.env.TARGET_REPO;
             const FEISHU_WEBHOOK = process.env.FEISHU_WEBHOOK;
             const BAIDU_APP_ID = process.env.BAIDU_APP_ID;
             const BAIDU_SECRET_KEY = process.env.BAIDU_SECRET_KEY;
-
+            
+            // 拆分仓库用户名和仓库名
             const [owner, repo] = TARGET_REPO.split("/");
-
-            // ======================
-            // 时间修复版（正确北京时间）
-            // ======================
+            
+            // 【时间格式化函数】修复重复加时问题，仅靠时区转正确北京时间
             function formatMergedTime(isoUtcTime) {
               if (!isoUtcTime) return "未知合入时间";
-              const date = new Date(isoUtcTime);
+              const date = new Date(isoUtcTime); // 删掉手动加8小时的逻辑
               return date.toLocaleString('zh-CN', {
                 year: 'numeric',
                 month: '2-digit',
@@ -43,18 +44,19 @@ jobs:
               }).replace(/\//g, '-');
             }
 
-            // 翻译函数
+            // 【百度翻译API函数】
             async function translateToZh(text) {
               if (!text || text.trim() === "") return "无内容";
+              // 密钥未配置时直接返回原文（不影响发消息）
               if (!BAIDU_APP_ID || !BAIDU_SECRET_KEY) {
-                console.warn("未配置百度翻译，使用原文");
+                console.warn("百度翻译密钥未配置，使用原文");
                 return text;
               }
 
               try {
-                const crypto = require('crypto');
                 const salt = Date.now().toString();
                 const signStr = BAIDU_APP_ID + text + salt + BAIDU_SECRET_KEY;
+                const crypto = require('crypto');
                 const sign = crypto.createHash('md5').update(signStr).digest('hex');
 
                 const params = new URLSearchParams({
@@ -66,30 +68,36 @@ jobs:
                   sign: sign
                 });
 
-                const res = await fetch(`https://fanyi-api.baidu.com/api/trans/vip/translate?${params}`);
-                const data = await res.json();
+                const response = await fetch(`https://fanyi-api.baidu.com/api/trans/vip/translate?${params}`, {
+                  method: 'GET',
+                  headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+                });
 
+                const data = await response.json();
                 if (data.error_code) {
-                  console.error("翻译失败", data.error_code);
+                  console.error(`翻译失败（${data.error_code}）：${data.error_msg}`);
                   return text;
                 }
-                return data.trans_result?.map(i => i.dst).join('\n') || text;
+
+                return data.trans_result?.map(item => item.dst).join('\n') || text;
               } catch (e) {
-                console.error("翻译异常", e);
+                console.error("翻译API调用异常：", e.message);
                 return text;
               }
             }
 
+            // 提取PR核心内容
             function extractCoreContent(body) {
               if (!body) return "无详细描述";
-              const pure = body.replace(/[#*`>]/g, "").replace(/\n+/g, "\n").trim();
-              return pure.length > 500 ? pure.substring(0, 500) + "..." : pure;
+              const pureText = body.replace(/[#*`>]/g, "").replace(/\n+/g, "\n").trim();
+              return pureText.length > 500 ? pureText.substring(0, 500) + "..." : pureText;
             }
-
-            // 主逻辑
+            
             try {
+              // 调用GitHub API获取已合并PR
               const { data: prs } = await github.rest.pulls.list({
-                owner, repo,
+                owner: owner,
+                repo: repo,
                 state: "closed",
                 sort: "updated",
                 direction: "desc",
@@ -98,56 +106,49 @@ jobs:
 
               const mergedPRs = prs.filter(pr => pr.merged_at);
               if (mergedPRs.length === 0) {
-                console.log("暂无新合并PR");
+                console.log("暂无新合并的PR");
                 return;
               }
 
-              const pr = mergedPRs[0];
-              const prNumber = pr.number;
-              const title = pr.title || "无标题";
-              const content = extractCoreContent(pr.body);
-              const creator = pr.user?.login || "未知创建者";
-              const merger = pr.merged_by?.login || "未知合并人";
-              const mergedAt = formatMergedTime(pr.merged_at);
+              const latestPR = mergedPRs[0];
+              // 提取PR信息
+              const prNumber = latestPR.number;
+              const originalTitle = latestPR.title || "无标题";
+              const originalContent = extractCoreContent(latestPR.body);
+              const creator = latestPR.user?.login || "未知创建者";
+              const mergedBy = latestPR.merged_by ? latestPR.merged_by.login : "未知合并人";
+              const mergedAt = formatMergedTime(latestPR.merged_at);
 
-              const zhTitle = await translateToZh(title);
-              const zhContent = await translateToZh(content);
-
-              const msg = {
+              // 构造飞书消息
+              const feishuMessage = {
                 msg_type: "text",
                 content: {
-                  text: `✅ PR已合并（中文汇报）
-仓库：${TARGET_REPO}
-编号：#${prNumber}
-合入时间：${mergedAt}
-【标题】
-英文：${title}
-中文：${zhTitle}
-【核心内容】
-英文：${content}
-中文：${zhContent}
-创建者：${creator}
-合并人：${merger}
-PR链接：${pr.html_url}`
+                  text: `✅ PR已合并（中文汇报）\n仓库：${TARGET_REPO}\n编号：#${prNumber}\n合入时间：${mergedAt}\n【标题】\n英文：${originalTitle}\n中文：${zhTitle}\n【核心内容】\n英文：${originalContent}\n中文：${zhContent}\n创建者：${creator}\n合并人：${mergedBy}\nPR链接：${latestPR.html_url}`
                 }
               };
 
-              await fetch(FEISHU_WEBHOOK, {
+              // 发送飞书消息
+              const response = await fetch(FEISHU_WEBHOOK, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(msg)
+                body: JSON.stringify(feishuMessage)
               });
 
-              console.log("已发送飞书通知");
-
-            } catch (err) {
-              console.error("失败：", err.message);
+              const responseText = await response.text();
+              console.log("飞书通知发送结果：", responseText);
+              console.log("翻译结果-标题：", zhTitle);
+            } catch (error) {
+              console.error("主逻辑执行出错：", error.message);
+              // 兜底发送错误通知
+              const errorMsg = {
+                msg_type: "text",
+                content: {
+                  text: `❌ PR监控脚本执行失败\n错误原因：${error.message}\n仓库：${TARGET_REPO}`
+                }
+              };
               await fetch(FEISHU_WEBHOOK, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  msg_type: "text",
-                  content: { text: `❌ 监控失败：${err.message}` }
-                })
+                body: JSON.stringify(errorMsg)
               });
             }
