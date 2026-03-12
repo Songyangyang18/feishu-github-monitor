@@ -119,6 +119,16 @@ jobs:
               const mergedBy = latestPR.merged_by ? latestPR.merged_by.login : "未知合并人";
               const mergedAt = formatMergedTime(latestPR.merged_at);
 
+              // 翻译内容（核心修复：强制赋值，避免未定义）
+              let zhTitle = originalTitle; // 默认值为原文
+              let zhContent = originalContent; // 默认值为原文
+              try {
+                zhTitle = await translateToZh(originalTitle);
+                zhContent = await translateToZh(originalContent);
+              } catch (e) {
+                console.error("翻译步骤出错，使用原文：", e.message);
+              }
+
               // 构造飞书消息
               const feishuMessage = {
                 msg_type: "text",
