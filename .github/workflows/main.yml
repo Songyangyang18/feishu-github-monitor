@@ -14,12 +14,31 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             // ========== 只改这2行 ==========
-            const TARGET_REPO = "ChaoWao/simpler";  // 替换成你要监控的原仓库（用户名/仓库名）
+            const TARGET_REPO = "ChaoWao/simpler";  // 监控的仓库（用户名/仓库名）
             const FEISHU_WEBHOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/167dcd0b-dab8-40c4-94d7-c43da40846a8";
             // ==============================
 
             // 拆分仓库用户名和仓库名
             const [owner, repo] = TARGET_REPO.split("/");
+            
+            // 翻译函数（免费通用，无需申请密钥）
+            async function translateToZh(text) {
+              if (!text || text.trim() === "") return "无内容";
+              try {
+                const res = await fetch("https://fanyi.youdao.com/translate?&doctype=json&type=AUTO&i=" + encodeURIComponent(text));
+                const data = await res.json();
+                return data.translateResult[0][0].tgt || text;
+              } catch (e) {
+                return text; // 翻译失败返回原文
+              }
+            }
+
+            // 提取PR核心内容（去格式+限长度）
+            function extractCoreContent(body) {
+              if (!body) return "无详细描述";
+              const pureText = body.replace(/[#*`>]/g, "").replace(/\n+/g, "\n").trim();
+              return pureText.length > 300 ? pureText.substring(0, 300) + "..." : pureText;
+            }
             
             try {
               // 调用GitHub API获取最近关闭的PR
@@ -42,11 +61,22 @@ jobs:
               // 取最新合并的PR
               const latestPR = mergedPRs[0];
               
-              // 构造飞书通知内容（单行写法避免YAML换行报错）
+              // 1. 提取关键信息
+              const prNumber = latestPR.number;
+              const originalTitle = latestPR.title || "无标题";
+              const originalContent = extractCoreContent(latestPR.body);
+              const mergedBy = latestPR.merged_by ? latestPR.merged_by.login : "未知";
+              const prUrl = latestPR.html_url;
+
+              // 2. 翻译成中文
+              const zhTitle = await translateToZh(originalTitle);
+              const zhContent = await translateToZh(originalContent);
+
+              // 3. 构造飞书通知内容（格式修复版）
               const feishuMessage = {
                 msg_type: "text",
                 content: {
-                  text: `✅ PR已合并\n仓库：${TARGET_REPO}\n编号：#${latestPR.number}\n标题：${latestPR.title || "无标题"}\n合并人：${latestPR.merged_by ? latestPR.merged_by.login : "未知"}\n链接：${latestPR.html_url}`
+                  text: `✅ PR已合并（中文汇报）\n仓库：${TARGET_REPO}\n编号：#${prNumber}\n【标题】\n英文：${originalTitle}\n中文：${zhTitle}\n【核心内容】\n英文：${originalContent}\n中文：${zhContent}\n合并人：${mergedBy}\nPR链接：${prUrl}`
                 }
               };
 
