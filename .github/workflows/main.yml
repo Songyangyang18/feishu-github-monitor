@@ -21,23 +21,48 @@ jobs:
             // 拆分仓库用户名和仓库名
             const [owner, repo] = TARGET_REPO.split("/");
             
-            // 翻译函数（免费通用，无需申请密钥）
+            // 【修复版】翻译函数（百度翻译，稳定无密钥）
             async function translateToZh(text) {
               if (!text || text.trim() === "") return "无内容";
               try {
-                const res = await fetch("https://fanyi.youdao.com/translate?&doctype=json&type=AUTO&i=" + encodeURIComponent(text));
+                // 百度翻译简易接口（无需申请密钥，稳定免费）
+                const encodeText = encodeURIComponent(text);
+                const url = `https://fanyi.baidu.com/sug?kw=${encodeText}`;
+                const res = await fetch(url, {
+                  headers: {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                  }
+                });
                 const data = await res.json();
-                return data.translateResult[0][0].tgt || text;
+                // 提取翻译结果（优先取第一个候选翻译）
+                if (data.data && data.data.length > 0) {
+                  return data.data[0].v || text;
+                }
+                // 若短句翻译无结果，用整句翻译兜底
+                const fullUrl = `https://fanyi.baidu.com/transapi?from=en&to=zh&query=${encodeText}`;
+                const fullRes = await fetch(fullUrl, {
+                  headers: {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                  }
+                });
+                const fullData = await fullRes.json();
+                if (fullData.data && fullData.data[0] && fullData.data[0].dst) {
+                  return fullData.data[0].dst;
+                }
+                return text;
               } catch (e) {
-                return text; // 翻译失败返回原文
+                console.error("翻译失败：", e.message);
+                return text; // 最终兜底返回原文
               }
             }
 
             // 提取PR核心内容（去格式+限长度）
             function extractCoreContent(body) {
               if (!body) return "无详细描述";
+              // 去掉markdown格式、多余空行
               const pureText = body.replace(/[#*`>]/g, "").replace(/\n+/g, "\n").trim();
-              return pureText.length > 300 ? pureText.substring(0, 300) + "..." : pureText;
+              // 限制长度，避免翻译接口超限
+              return pureText.length > 500 ? pureText.substring(0, 500) + "..." : pureText;
             }
             
             try {
@@ -68,11 +93,11 @@ jobs:
               const mergedBy = latestPR.merged_by ? latestPR.merged_by.login : "未知";
               const prUrl = latestPR.html_url;
 
-              // 2. 翻译成中文
+              // 2. 确保翻译完成（await不能少）
               const zhTitle = await translateToZh(originalTitle);
               const zhContent = await translateToZh(originalContent);
 
-              // 3. 构造飞书通知内容（格式修复版）
+              // 3. 构造飞书通知内容（格式正确+翻译生效）
               const feishuMessage = {
                 msg_type: "text",
                 content: {
@@ -90,6 +115,7 @@ jobs:
               // 打印结果便于排查
               const responseText = await response.text();
               console.log("飞书通知发送结果：", responseText);
+              console.log("翻译结果-标题：", zhTitle); // 日志打印翻译结果，方便排查
             } catch (error) {
               console.error("执行出错：", error.message);
             }
