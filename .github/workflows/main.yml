@@ -14,7 +14,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             // ========== 只改这2行 ==========
-            const TARGET_REPO = "https://github.com/ChaoWao/simpler";  // 替换成你要监控的原仓库（用户名/仓库名）
+            const TARGET_REPO = "ChaoWao/simpler";  // 替换成你要监控的原仓库（用户名/仓库名）
             const FEISHU_WEBHOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/167dcd0b-dab8-40c4-94d7-c43da40846a8";
             // ==============================
 
