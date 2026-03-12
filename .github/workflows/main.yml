@@ -21,6 +21,25 @@ jobs:
             // 拆分仓库用户名和仓库名
             const [owner, repo] = TARGET_REPO.split("/");
             
+            // 【时间格式化函数】将GitHub UTC时间转为北京时间（YYYY-MM-DD HH:mm:ss）
+            function formatMergedTime(isoUtcTime) {
+              if (!isoUtcTime) return "未知合入时间";
+              // 解析UTC时间并转为北京时间（UTC+8）
+              const utcDate = new Date(isoUtcTime);
+              const beijingDate = new Date(utcDate.getTime() + 8 * 60 * 60 * 1000); // 加8小时时差
+              // 格式化输出：2024-05-20 14:30:25
+              return beijingDate.toLocaleString('zh-CN', {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hour12: false,
+                timeZone: 'Asia/Shanghai'
+              }).replace(/\//g, '-'); // 替换斜杠为横线，格式更统一
+            }
+
             // 【正式版】百度翻译API函数（读取GitHub Secret，带签名验证）
             async function translateToZh(text) {
               if (!text || text.trim() === "") return "无内容";
@@ -109,22 +128,23 @@ jobs:
               // 取最新合并的PR
               const latestPR = mergedPRs[0];
               
-              // 1. 提取关键信息
+              // 1. 提取关键信息（新增合入时间）
               const prNumber = latestPR.number;
               const originalTitle = latestPR.title || "无标题";
               const originalContent = extractCoreContent(latestPR.body);
-              const mergedBy = latestPR.merged_by ? latestPR.merged_by.login : "未知";
-              const prUrl = latestPR.html_url;
+              const creator = latestPR.user?.login || "未知创建者"; // PR创建者（必含）
+              const mergedBy = latestPR.merged_by ? latestPR.merged_by.login : "未知合并人"; // 合并人（可选）
+              const mergedAt = formatMergedTime(latestPR.merged_at); // 合入时间（格式化后的北京时间）
 
               // 2. 确保翻译完成（await不能少）
               const zhTitle = await translateToZh(originalTitle);
               const zhContent = await translateToZh(originalContent);
 
-              // 3. 构造飞书通知内容（格式正确+翻译生效）
+              // 3. 构造飞书通知内容（新增合入时间）
               const feishuMessage = {
                 msg_type: "text",
                 content: {
-                  text: `✅ PR已合并（中文汇报）\n仓库：${TARGET_REPO}\n编号：#${prNumber}\n【标题】\n英文：${originalTitle}\n中文：${zhTitle}\n【核心内容】\n英文：${originalContent}\n中文：${zhContent}\n合并人：${mergedBy}\nPR链接：${prUrl}`
+                  text: `✅ PR已合并（中文汇报）\n仓库：${TARGET_REPO}\n编号：#${prNumber}\n合入时间：${mergedAt}\n【标题】\n英文：${originalTitle}\n中文：${zhTitle}\n【核心内容】\n英文：${originalContent}\n中文：${zhContent}\n创建者：${creator}\n合并人：${mergedBy}\nPR链接：${prUrl}`
                 }
               };
 
